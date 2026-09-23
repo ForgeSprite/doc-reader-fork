@@ -141,11 +141,25 @@ def _clear_pid(name: str) -> None:
 
 
 def _running_pid(name: str) -> int:
+    """The PID of this service if it is really running, else 0.
+
+    A PID file survives a reboot, and Windows hands the same numbers out again, so
+    "the PID is alive" is not enough: after a restart the helper's old number can
+    belong to a system service, which made `start` skip the helper and `status`
+    report it running. The process must also be one of ours (same module, same
+    data-folder marker). If the PID file is missing or stale but one of ours is
+    running anyway, adopt it instead of starting a second copy.
+    """
+    module = SERVICES[name]["module"]
+    ours = _find_stray_pids(module) if IS_WINDOWS else []
     pid = _read_pid(name)
-    if pid and pid_is_running(pid):
+    if pid and pid_is_running(pid) and (not IS_WINDOWS or pid in ours):
         return pid
     if pid:
         _clear_pid(name)
+    if ours:
+        _write_pid(name, ours[0])
+        return ours[0]
     return 0
 
 
