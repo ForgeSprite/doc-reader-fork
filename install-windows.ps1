@@ -37,6 +37,14 @@ $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest is many times slo
 
 function Say([string] $Message) { Write-Host "[doc-reader setup] $Message" -ForegroundColor Cyan }
 function Warn([string] $Message) { Write-Host "[doc-reader setup] $Message" -ForegroundColor Yellow }
+function Run-Native {
+    # git and winget write progress to stderr; Windows PowerShell 5.1 turns that into
+    # error records, which "Stop" would treat as fatal. Judge them by exit code instead.
+    # A plain function (no param block) so options such as -C or -e reach the tool untouched.
+    $Exe = $args[0]; $Rest = @($args | Select-Object -Skip 1)
+    $saved = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    try { & $Exe @Rest 2>&1 | ForEach-Object { "$_" } | Write-Host; return $LASTEXITCODE } finally { $ErrorActionPreference = $saved }
+}
 function Find([string] $Name) { $c = Get-Command $Name -ErrorAction SilentlyContinue; if ($c) { return $c.Source } return $null }
 function Refresh-Path {
     # Pick up tools winget just installed without opening a new terminal.
@@ -79,7 +87,44 @@ $env:UV_LINK_MODE = "copy"
 
 Say "Installing Doc Reader into $AppDir"
 
-# ------------------------------------------------------------------ 1. tools
+# ------------------------------------------------------------------ 1. code
+if (-not $InPlace) {
+    $git = Find "git"
+    if (Test-Path (Join-Path $AppDir ".git")) {
+        Say "Updating the existing copy ..."
+        if ($git) { if ((Run-Native $git -C $AppDir pull --ff-only origin $Branch) -ne 0) { Warn "Could not update (local changes?); keeping the current code." } }
+    } elseif (Test-Path (Join-Path $AppDir "doc_reader\windows_app.py")) {
+        Say "Found an existing copy (no git); downloading the latest code over it ..."
+        $git = $null
+        $refresh = $true
+    }
+    if (-not (Test-Path (Join-Path $AppDir "doc_reader\windows_app.py")) -or $refresh) {
+        if ($git -and -not $refresh) {
+            Say "Downloading the code with git ..."
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $AppDir) | Out-Null
+            if ((Test-Path $AppDir) -and (Get-ChildItem $AppDir -Force | Where-Object Name -ne ".runtime")) { throw "$AppDir already exists and is not a Doc Reader folder. Pick another place with DOC_READER_INSTALL_DIR." }
+            # A previous partial run may have left .runtime behind: park it outside while cloning.
+            $runtimeKept = $null
+            if (Test-Path $Runtime) { $runtimeKept = Join-Path ([IO.Path]::GetTempPath()) ("doc-reader-runtime-" + [guid]::NewGuid().ToString("N")); Move-Item $Runtime $runtimeKept }
+            if (Test-Path $AppDir) { Remove-Item $AppDir -Force -Recurse }
+            if ((Run-Native $git clone --branch $Branch --depth 1 $RepoUrl $AppDir) -ne 0) { throw "git clone of $RepoUrl failed." }
+            if ($runtimeKept) { Move-Item $runtimeKept $Runtime }
+        } else {
+            Say "Downloading the code as a zip ..."
+            $zipUrl = ($RepoUrl -replace "\.git$", "") + "/archive/refs/heads/$Branch.zip"
+            $tmp = Join-Path ([IO.Path]::GetTempPath()) ("doc-reader-" + [guid]::NewGuid().ToString("N"))
+            New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+            Invoke-WebRequest $zipUrl -OutFile (Join-Path $tmp "code.zip") -UseBasicParsing
+            Expand-Archive (Join-Path $tmp "code.zip") -DestinationPath $tmp -Force
+            $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
+            New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
+            Copy-Item (Join-Path $inner.FullName "*") $AppDir -Recurse -Force
+            Remove-Item $tmp -Recurse -Force
+        }
+    }
+}
+
+# ------------------------------------------------------------------ 2. tools
 $winget = Find "winget"
 $uv = Find "uv"
 if (-not $uv) {
@@ -102,48 +147,11 @@ Say "uv: $uv"
 if (-not (Find "ffplay")) {
     if ($winget) {
         Say "Installing FFmpeg (audio playback) with winget ..."
-        & $winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements --silent | Out-Null
+        [void](Run-Native $winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements --silent)
         Refresh-Path
     }
     if (-not (Find "ffplay")) {
         Warn "FFmpeg is not on PATH yet. Doc Reader looks in the usual winget folders, so this is often fine; 'doctor' below will say for sure. If audio does not play, install it with: winget install Gyan.FFmpeg"
-    }
-}
-
-# ------------------------------------------------------------------ 2. code
-if (-not $InPlace) {
-    $git = Find "git"
-    if (Test-Path (Join-Path $AppDir ".git")) {
-        Say "Updating the existing copy ..."
-        if ($git) { & $git -C $AppDir pull --ff-only origin $Branch; if ($LASTEXITCODE -ne 0) { Warn "Could not update (local changes?); keeping the current code." } }
-    } elseif (Test-Path (Join-Path $AppDir "doc_reader\windows_app.py")) {
-        Say "Found an existing copy (no git); downloading the latest code over it ..."
-        $git = $null
-        $refresh = $true
-    }
-    if (-not (Test-Path (Join-Path $AppDir "doc_reader\windows_app.py")) -or $refresh) {
-        if ($git -and -not $refresh) {
-            Say "Downloading the code with git ..."
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $AppDir) | Out-Null
-            if ((Test-Path $AppDir) -and (Get-ChildItem $AppDir -Force | Where-Object Name -ne ".runtime")) { throw "$AppDir already exists and is not a Doc Reader folder. Pick another place with DOC_READER_INSTALL_DIR." }
-            $runtimeKept = $null
-            if (Test-Path $Runtime) { $runtimeKept = "$Runtime.keep"; Move-Item $Runtime $runtimeKept }
-            if (Test-Path $AppDir) { Remove-Item $AppDir -Force -Recurse }
-            & $git clone --branch $Branch --depth 1 $RepoUrl $AppDir
-            if ($LASTEXITCODE -ne 0) { throw "git clone of $RepoUrl failed." }
-            if ($runtimeKept) { Move-Item $runtimeKept $Runtime }
-        } else {
-            Say "Downloading the code as a zip ..."
-            $zipUrl = ($RepoUrl -replace "\.git$", "") + "/archive/refs/heads/$Branch.zip"
-            $tmp = Join-Path ([IO.Path]::GetTempPath()) ("doc-reader-" + [guid]::NewGuid().ToString("N"))
-            New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-            Invoke-WebRequest $zipUrl -OutFile (Join-Path $tmp "code.zip") -UseBasicParsing
-            Expand-Archive (Join-Path $tmp "code.zip") -DestinationPath $tmp -Force
-            $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
-            New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
-            Copy-Item (Join-Path $inner.FullName "*") $AppDir -Recurse -Force
-            Remove-Item $tmp -Recurse -Force
-        }
     }
 }
 
