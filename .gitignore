@@ -35,3 +35,6 @@ htmlcov/
 .env
 .env.*
 *.log
+
+# installer-managed tools (uv, Python, caches)
+.runtime/

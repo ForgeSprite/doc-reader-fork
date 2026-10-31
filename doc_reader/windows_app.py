@@ -571,6 +571,49 @@ def cmd_open() -> int:
     return 0
 
 
+def cmd_prefetch_models() -> int:
+    """Download the Kokoro voice model and the Whisper model now, so the first use is instant.
+
+    Both land in the normal Hugging Face cache (%USERPROFILE%\\.cache\\huggingface), which
+    is where the speech service looks for them later.
+    """
+    for key, value in child_env().items():
+        os.environ.setdefault(key, value)
+    try:
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:  # noqa: BLE001
+        device = "cpu"
+    print(f"[doc-reader] downloading speech models (device: {device}) ...", flush=True)
+    failed = False
+    try:
+        from doc_reader.platform_tools import configure_espeak
+
+        configure_espeak()
+        from kokoro import KPipeline
+
+        pipeline = KPipeline(lang_code="a", device=device)
+        for _ in pipeline("Doc Reader is ready.", voice="af_heart"):
+            pass
+        print("[doc-reader] Kokoro text-to-speech model: ready", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        failed = True
+        print(f"[doc-reader] Kokoro download failed: {type(exc).__name__}: {exc}", flush=True)
+    try:
+        from doc_reader.platform_tools import configure_windows_dll_search
+
+        configure_windows_dll_search()
+        from faster_whisper import WhisperModel
+
+        WhisperModel(DEFAULT_STT_MODEL, device=device, compute_type="float16" if device == "cuda" else "int8")
+        print(f"[doc-reader] Whisper speech-to-text model ({DEFAULT_STT_MODEL}): ready", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        failed = True
+        print(f"[doc-reader] Whisper download failed: {type(exc).__name__}: {exc}", flush=True)
+    return 1 if failed else 0
+
+
 def cmd_run_foreground(name: str, extra: list[str]) -> int:
     service = SERVICES[name]
     command = [sys.executable, "-m", service["module"], *service["args"], *extra]
@@ -592,6 +635,7 @@ def build_parser() -> argparse.ArgumentParser:
     restart.add_argument("--quiet", action="store_true")
     sub.add_parser("status", help="Show service health")
     sub.add_parser("doctor", help="Check Python, CUDA, Kokoro, ffmpeg, espeak, microphone")
+    sub.add_parser("prefetch-models", help="Download the Kokoro and Whisper models now")
     sub.add_parser("open", help="Open the web app (starting services if needed)")
     sub.add_parser("install-shortcuts", help="Put a clickable Doc Reader on the Desktop and in the Start menu")
     sub.add_parser("remove-shortcuts", help="Remove the Desktop and Start menu shortcuts")
@@ -620,6 +664,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_status()
     if command == "doctor":
         return cmd_doctor()
+    if command == "prefetch-models":
+        return cmd_prefetch_models()
     if command == "install-shortcuts":
         return install_shortcuts()
     if command == "remove-shortcuts":
