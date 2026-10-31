@@ -102,6 +102,26 @@ continuous by preparing later chunks in the background.
 Everything runs locally on your PC: the Kokoro speech service, Whisper
 speech-to-text, the web app, and a tray helper for hotkeys and dictation.
 
+### One-step install (recommended)
+
+Open PowerShell (not as administrator) and run:
+
+```powershell
+irm https://raw.githubusercontent.com/AaronTateDev/doc-reader-fork/windows-support/install-windows.ps1 | iex
+```
+
+Or double-click `install-windows.cmd` in a downloaded copy of this repository.
+It installs uv and FFmpeg, puts the app in `%USERPROFILE%\DocReader`, builds
+the Python environment (CUDA PyTorch on NVIDIA GPUs), downloads the Kokoro and
+Whisper models, adds Desktop and Start menu shortcuts, enables start at login,
+and starts Doc Reader. Re-run it any time to update.
+
+Setting it up with an AI assistant (Claude Code, Codex, Cursor)? Point it at
+[SETUP_WITH_AI.md](SETUP_WITH_AI.md); it covers installing, verifying, and the
+Windows pitfalls an assistant needs to avoid.
+
+### Manual install
+
 Prerequisites (one time):
 
 ```powershell

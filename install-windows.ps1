@@ -156,6 +156,13 @@ if (-not (Find "ffplay")) {
 }
 
 # ------------------------------------------------------------------ 3. Python environment
+# Use only a Python that uv installs into .runtime. Without this uv happily reuses one it
+# finds registered elsewhere, which may be the redirected AppData copy described above.
+$env:UV_PYTHON_PREFERENCE = "only-managed"
+if (-not (Test-Path (Join-Path $AppDir ".venv\Scripts\python.exe"))) {
+    Say "Getting Python 3.12 ..."
+    if ((Run-Native $uv python install 3.12) -ne 0) { throw "uv could not install Python 3.12." }
+}
 $Launcher = Join-Path $AppDir "run-doc-reader.ps1"
 Say "Building the Python environment (the first time downloads PyTorch, about 2.5 GB) ..."
 & powershell -NoProfile -ExecutionPolicy Bypass -File $Launcher --prepare-only

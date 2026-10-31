@@ -63,6 +63,15 @@ function Invoke-Checked([string] $Exe, [string[]] $Arguments) {
     }
 }
 
+function Test-Exit {
+    # Run a probe and report only whether it succeeded. Windows PowerShell 5.1 turns a
+    # native command's stderr into a terminating error under "Stop", even with 2>$null,
+    # so a probe that is meant to fail (no torch yet on a fresh install) would abort setup.
+    $exe = $args[0]; $rest = @($args | Select-Object -Skip 1)
+    $saved = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    try { & $exe @rest 2>&1 | Out-Null; return ($LASTEXITCODE -eq 0) } catch { return $false } finally { $ErrorActionPreference = $saved }
+}
+
 # ---------------------------------------------------------------- create venv
 $uv = Find-Command "uv"
 if (-not (Test-Path $VenvPython)) {
@@ -74,8 +83,7 @@ if (-not (Test-Path $VenvPython)) {
         $python = $null
         if ($py) {
             foreach ($version in @("3.12", "3.11", "3.10")) {
-                & $py "-$version" -c "import sys" 2>$null
-                if ($LASTEXITCODE -eq 0) { $python = @($py, "-$version"); break }
+                if (Test-Exit $py "-$version" -c "import sys") { $python = @($py, "-$version"); break }
             }
         }
         if (-not $python) {
@@ -107,9 +115,7 @@ if ($reqHash -ne $installedHash) {
     if (-not $uv) {
         Invoke-Checked $VenvPython @("-m", "pip", "install", "--upgrade", "pip")
     }
-    $hasTorch = $false
-    & $VenvPython -c "import torch" 2>$null
-    if ($LASTEXITCODE -eq 0) { $hasTorch = $true }
+    $hasTorch = Test-Exit $VenvPython -c "import torch"
     if (-not $hasTorch) {
         if (Test-NvidiaGpu) {
             Write-Log "NVIDIA GPU detected: installing PyTorch $TorchVersion ($CudaIndex) ..."
